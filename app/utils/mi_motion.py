@@ -14,7 +14,9 @@ from app.validation import normalize_account
 
 
 class MotionError(Exception):
-    pass
+    def __init__(self, message, *, status_code=None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 class MiMotion:
@@ -25,6 +27,7 @@ class MiMotion:
         self.is_phone = self.user.startswith('+86')
         self.session = session or requests.Session()
         self.device_id = self.tokens.get('device_id') or str(uuid.uuid4())
+        self.device_lookup_fallback = False
 
     @staticmethod
     def get_beijing_time():
@@ -60,10 +63,10 @@ class MiMotion:
             # 不记录账号、请求体、令牌、响应体或带查询参数的 URL。
             logging.getLogger(__name__).warning('Zepp request rejected: stage=%s status=%s', stage, response.status_code)
             if response.status_code == 429:
-                raise MotionError('Zepp 请求过于频繁，请稍后再试。')
+                raise MotionError('Zepp 请求过于频繁，请稍后再试。', status_code=429)
             if response.status_code == 400:
-                raise MotionError(f'Zepp 在「{stage}」阶段拒绝了请求（HTTP 400）。请先在 Zepp Life App 确认账号能正常登录；若仍失败，请反馈此阶段名称以检查接口兼容性。')
-            raise MotionError(f'Zepp 在「{stage}」阶段返回 HTTP {response.status_code}，请稍后重试。')
+                raise MotionError(f'Zepp 在「{stage}」阶段拒绝了请求（HTTP 400）。请先在 Zepp Life App 确认账号能正常登录；若仍失败，请反馈此阶段名称以检查接口兼容性。', status_code=400)
+            raise MotionError(f'Zepp 在「{stage}」阶段返回 HTTP {response.status_code}，请稍后重试。', status_code=response.status_code)
         return response
 
     @staticmethod
@@ -130,16 +133,31 @@ class MiMotion:
         return self.tokens
 
     def _bound_device(self):
+        self.device_lookup_fallback = False
         if self.tokens.get('bound_device_id'):
             return self.tokens['bound_device_id']
-        result = self._json(self._request('GET', 'https://api-mifit-cn.huami.com/v1/device/binds.json',
-            params={'userid': self.tokens['user_id']}, headers={'apptoken': self.tokens['app_token']}))
-        for item in result.get('items') or []:
+        try:
+            result = self._json(self._request('GET', 'https://api-mifit-cn.huami.com/v1/device/binds.json',
+                params={'userid': self.tokens['user_id']}, headers={'apptoken': self.tokens['app_token'],
+                    'User-Agent': 'MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)'}))
+        except MotionError as exc:
+            if exc.status_code is not None and not 500 <= exc.status_code < 600:
+                raise
+            # 设备查询是辅助步骤；沿用上游的默认设备兼容路径，不重试提交接口。
+            logging.getLogger(__name__).warning('Zepp device lookup unavailable; using default device parameters')
+            result = {}
+        items = result.get('items') or []
+        if not isinstance(items, list):
+            items = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
             if item.get('deviceType') == 0 or any(word in str(item.get('productName', '')).lower() for word in ('band', 'watch', '手环', '手表')):
                 ident = item.get('deviceId') or item.get('mac')
                 if ident and re.fullmatch(r'[A-Za-z0-9:-]{1,64}', str(ident)):
                     self.tokens['bound_device_id'] = str(ident).replace(':', '').upper()
                     return self.tokens['bound_device_id']
+        self.device_lookup_fallback = True
         return 'DA932FFFFE8816E7'
 
     def sync_step(self, step_count):
@@ -158,7 +176,8 @@ class MiMotion:
                 params={'t': self.get_time(), 'r': str(uuid.uuid4())}, data=body,
                 headers={'apptoken': self.tokens['app_token'], 'Content-Type': 'application/x-www-form-urlencoded'}))
             if response.get('message') == 'success':
-                return f'Zepp 已接受 {step_count:,} 步；微信／支付宝展示请在对应 App 核对。', True
+                note = '未获取到绑定设备，已使用默认设备参数。' if self.device_lookup_fallback else ''
+                return f'Zepp 已接受 {step_count:,} 步；{note}微信／支付宝展示请在对应 App 核对。', True
             return 'Zepp 未接受本次提交，请检查账号、绑定设备与 App 状态后重试。', False
         except MotionError as exc:
             return str(exc), False

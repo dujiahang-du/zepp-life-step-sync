@@ -131,3 +131,45 @@ def test_http_400_reports_stage_without_disclosing_secrets(path, stage, caplog):
     assert stage in caplog.text
     for secret in ['private-response-value','private-password','private-query','private-body','mail@example.invalid']:
         assert secret not in str(caught.value) and secret not in caplog.text
+
+
+@pytest.mark.parametrize('failure',[500,502,503,'timeout','invalid_json','invalid_items'])
+def test_device_lookup_failure_falls_back_without_caching_or_retrying_submission(failure):
+    session = Mock()
+    def send(method, url, **kwargs):
+        if url.endswith('binds.json'):
+            assert kwargs['headers']['User-Agent'].startswith('MiFit6.14.0')
+            if failure == 'timeout':
+                raise requests.Timeout()
+            if failure == 'invalid_json':
+                bad = response(); bad.json.side_effect = ValueError('private-response')
+                return bad
+            if failure == 'invalid_items':
+                return response(data={'items':'unexpected'})
+            return response(failure)
+        return response(data={'message':'success'})
+    session.request.side_effect = send
+    motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session)
+    message, ok = motion.sync_step(12345)
+    assert ok and '默认设备参数' in message
+    assert 'bound_device_id' not in motion.tokens
+    submits = [c for c in session.request.call_args_list if c.args[1].endswith('band_data.json')]
+    assert len(submits) == 1
+    assert parse_qs(submits[0].kwargs['data'])['last_deviceid'] == ['DA932FFFFE8816E7']
+
+
+@pytest.mark.parametrize('status',[400,401,403,429])
+def test_device_lookup_client_errors_still_stop_submission(status):
+    session = Mock()
+    session.request.side_effect = [response(data={'message':'success'}),response(status)]
+    message, ok = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session).sync_step(12345)
+    assert not ok
+    assert all(not c.args[1].endswith('band_data.json') for c in session.request.call_args_list)
+
+
+def test_fallback_does_not_mask_submission_failure():
+    session = Mock()
+    session.request.side_effect = [response(data={'message':'success'}),response(500),response(500)]
+    message, ok = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session).sync_step(12345)
+    assert not ok and '步数提交' in message and 'HTTP 500' in message
+    assert sum(c.args[1].endswith('band_data.json') for c in session.request.call_args_list) == 1
