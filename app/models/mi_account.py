@@ -9,6 +9,7 @@ class MiAccount(db.Model):
     mi_user = db.Column(db.String(120), nullable=False)  # 小米运动账号
     mi_password = db.Column(db.Text, nullable=False)  # 加密后的运动账号密码
     token_data = db.Column(db.Text)
+    device_data = db.Column(db.Text)
     sync_hold = db.Column(db.String(16))
     sync_lock_until = db.Column(db.DateTime)
     sync_lock_token = db.Column(db.String(36))
@@ -32,6 +33,11 @@ class MiAccount(db.Model):
     def get_password(self):
         from app.security import decrypt
         return decrypt(self.mi_password)
+
+    def get_device(self):
+        import json
+        from app.security import decrypt
+        return json.loads(decrypt(self.device_data)) if self.device_data else {}
 
     def __repr__(self):
         return f'<MiAccount {self.mi_user}>'

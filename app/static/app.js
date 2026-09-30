@@ -121,7 +121,7 @@ function showTask(card, message, state, recovery = false) {
   const status = card.querySelector('[data-task-status]');
   const badge = document.createElement('span');
   badge.className = 'badge ' + (state === 'success' ? 'success' : state === 'failed' ? 'danger' : 'info');
-  badge.textContent = ({success:'已接受', failed:'执行失败', running:'执行中', queued:'等待执行', unknown:'结果待确认', requires_auth:'需要授权', skipped:'已跳过'})[state] || '待确认';
+  badge.textContent = ({success:'已接受', failed:'执行失败', running:'执行中', queued:'等待执行', unknown:'结果待确认', requires_device:'需要设备', requires_auth:'需要授权', skipped:'已跳过'})[state] || '待确认';
   const text = document.createElement('p');
   text.textContent = message;
   status.replaceChildren(badge, text);
@@ -154,7 +154,7 @@ async function pollJob(card, url, attempts = 0) {
   try {
     const result = await requestJson(url);
     showTask(card, result.message, result.status);
-    if (['success', 'failed', 'requires_auth', 'unknown', 'skipped'].includes(result.status)) {
+    if (['success', 'failed', 'requires_auth', 'requires_device', 'unknown', 'skipped'].includes(result.status)) {
       delete card.dataset.pendingJob;
       const response = await fetch('/accounts', {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
       if (!response.ok) throw new Error('结果已返回，请重新加载账号状态。');

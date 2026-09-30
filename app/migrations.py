@@ -14,6 +14,7 @@ def upgrade(app):
         'step_record': {'source': "VARCHAR(16) DEFAULT 'manual'", 'outcome': 'VARCHAR(16)'},
     }
     additions['mi_account']['sync_hold'] = 'VARCHAR(16)'
+    additions['mi_account']['device_data'] = 'TEXT'
     pending = []
     for table, fields in additions.items():
         if inspector.has_table(table):

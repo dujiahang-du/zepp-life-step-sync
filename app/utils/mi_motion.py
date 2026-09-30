@@ -9,6 +9,7 @@ from urllib.parse import parse_qs, urlencode, urlparse
 import requests
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
+from app.utils.devices import DeviceProtocol, matching_device, wearable_device
 from app.time_utils import local_now
 from app.validation import normalize_account
 
@@ -19,7 +20,7 @@ class MotionError(Exception):
         self.status_code = status_code
 
 
-class MiMotion:
+class MiMotion(DeviceProtocol):
     def __init__(self, user, password, tokens=None, session=None):
         self.user = normalize_account(user)
         self.password = password
@@ -27,7 +28,7 @@ class MiMotion:
         self.is_phone = self.user.startswith('+86')
         self.session = session or requests.Session()
         self.device_id = self.tokens.get('device_id') or str(uuid.uuid4())
-        self.device_lookup_fallback = False
+        self.virtual_device = {}
         self.outcome = 'failed'
 
     @staticmethod
@@ -51,7 +52,8 @@ class MiMotion:
             '/v2/registrations/tokens': '账号认证',
             '/v2/client/login': '客户端授权',
             '/huami.health.getUserInfo.json': '令牌校验',
-            '/v1/device/binds.json': '设备查询',
+            '/v1/device/lists.json': '设备查询',
+            '/v1/device/binds.json': '设备绑定',
             '/v1/data/band_data.json': '步数提交',
         }.get(urlparse(url).path, '服务请求')
         try:
@@ -153,32 +155,15 @@ class MiMotion:
         return self.tokens
 
     def _bound_device(self):
-        self.device_lookup_fallback = False
-        if self.tokens.get('bound_device_id'):
-            return self.tokens['bound_device_id']
-        try:
-            result = self._json(self._request('GET', 'https://api-mifit-cn.huami.com/v1/device/binds.json',
-                params={'userid': self.tokens['user_id']}, headers={'apptoken': self.tokens['app_token'],
-                    'User-Agent': 'MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)'}))
-        except MotionError as exc:
-            if exc.status_code is not None and not 500 <= exc.status_code < 600:
-                raise
-            # 设备查询是辅助步骤；沿用上游的默认设备兼容路径，不重试提交接口。
-            logging.getLogger(__name__).warning('Zepp device lookup unavailable; using default device parameters')
-            result = {}
-        items = result.get('items') or []
-        if not isinstance(items, list):
-            items = []
-        for item in items:
-            if not isinstance(item, dict):
-                continue
-            if item.get('deviceType') == 0 or any(word in str(item.get('productName', '')).lower() for word in ('band', 'watch', '手环', '手表')):
-                ident = item.get('deviceId') or item.get('mac')
-                if ident and re.fullmatch(r'[A-Za-z0-9:-]{1,64}', str(ident)):
-                    self.tokens['bound_device_id'] = str(ident).replace(':', '').upper()
-                    return self.tokens['bound_device_id']
-        self.device_lookup_fallback = True
-        return 'DA932FFFFE8816E7'
+        devices = self.get_devices()
+        if self.virtual_device.get('state') in ('attempted', 'confirmed'):
+            ident = matching_device(devices, self.virtual_device)
+        else:
+            ident = wearable_device(devices)
+        if not ident:
+            self.outcome = 'requires_device'
+            raise MotionError('未确认可用的绑定设备，已暂停同步。请先进入设备管理查询或绑定；未提交步数。')
+        return ident
 
     def sync_step(self, step_count):
         self.outcome = 'failed'
@@ -200,8 +185,7 @@ class MiMotion:
                 headers={'apptoken': self.tokens['app_token'], 'Content-Type': 'application/x-www-form-urlencoded'}))
             if response.get('message') == 'success':
                 self.outcome = 'success'
-                note = '未获取到绑定设备，已使用默认设备参数。' if self.device_lookup_fallback else ''
-                return f'Zepp 已接受 {step_count:,} 步；{note}微信／支付宝展示请在对应 App 核对。', True
+                return f'Zepp 已接受 {step_count:,} 步；微信／支付宝展示请在对应 App 核对。', True
             if not response.get('message'):
                 raise MotionError('Zepp 提交响应缺少结果字段。')
             return 'Zepp 未接受本次提交，请检查账号、绑定设备与 App 状态后重试。', False

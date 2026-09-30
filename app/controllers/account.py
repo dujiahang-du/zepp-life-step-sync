@@ -8,7 +8,8 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy import or_
 from app import db
 from app.models import MiAccount, StepRecord, SyncJob
-from app.security import encrypt
+from app.security import encrypt, decrypt
+from app.utils.devices import matching_device, wearable_device, new_device_identity
 from app.services import BusyError, is_busy, job_state, submit_sync
 from app.stats import statistics, trend_points
 from app.time_utils import local_day_start, utcnow
@@ -146,7 +147,7 @@ def edit_account(id):
 def toggle_account(id):
     account = owned_account(id)
     if account.sync_hold:
-        flash('请先重新授权或核对结果，再启用自动同步。', 'warning')
+        flash('请先完成授权、设备确认或结果核对，再启用自动同步。', 'warning')
         return redirect(url_for('account.list_accounts'))
     if unlocked_query(account).filter(MiAccount.sync_hold.is_(None)).update({'is_active': ~MiAccount.is_active}, synchronize_session=False) != 1:
         db.session.rollback()
@@ -244,6 +245,104 @@ def recover_account(id):
     return render_template('account/recover.html', account=account, errors=errors), 422 if errors else 200
 
 
+@account_bp.route('/account/<int:id>/device', methods=['GET', 'POST'])
+@login_required
+def manage_device(id):
+    account = owned_account(id)
+    errors = {}
+    if request.method == 'POST':
+        pending = SyncJob.query.filter_by(account_id=id).filter(SyncJob.status.in_(('queued', 'running'))).all()
+        for job in pending:
+            job_state(job)
+        db.session.refresh(account)
+        action = request.form.get('action')
+        if action not in ('check', 'bind'):
+            abort(400)
+        if account.sync_hold in ('requires_auth', 'unknown'):
+            errors['form'] = '请先完成重新授权或核对上次提交结果，再管理设备。'
+        elif action == 'bind' and request.form.get('confirmed') != 'on':
+            errors['form'] = '请先确认了解虚拟绑定的作用及限制。'
+        else:
+            ident = str(uuid.uuid4())
+            claimed = unlocked_query(account).filter(MiAccount.sync_hold == account.sync_hold).update(
+                {'sync_lock_token': ident, 'sync_lock_until': utcnow() + timedelta(minutes=5),
+                 'is_active': False, 'sync_hold': 'requires_device'}, synchronize_session=False)
+            if claimed != 1:
+                db.session.rollback()
+                errors['form'] = '账号正在执行或状态已变化，请刷新后重试。'
+            else:
+                db.session.commit()
+                client = None
+
+                def save_device(identity, **changes):
+                    changes['device_data'] = encrypt(json.dumps(identity))
+                    if MiAccount.query.filter_by(id=id, sync_lock_token=ident).update(changes, synchronize_session=False) != 1:
+                        db.session.rollback()
+                        raise ValueError('操作已超时，请刷新后重新查询设备。')
+                    db.session.commit()
+
+                try:
+                    identity = account.get_device()
+                    tokens = json.loads(decrypt(account.token_data)) if account.token_data else {}
+                    client = client_factory()(account.mi_user, account.get_password(), tokens=tokens)
+                    client.login()  # 此处只复用授权，禁止自动使用密码登录。
+                    devices = client.get_devices()
+                    attempted = identity.get('state') in ('attempted', 'confirmed')
+                    found = matching_device(devices, identity) if attempted else wearable_device(devices)
+                    if found:
+                        identity = {**identity, 'state': 'confirmed'} if attempted else {'state': 'available', 'id': found}
+                        save_device(identity, sync_hold=None)
+                        flash('已从 Zepp 设备列表确认设备，可手动同步。微信是否更新仍需在微信核对；自动同步保持暂停。', 'success')
+                        return redirect(url_for('account.manage_device', id=id))
+                    if attempted:
+                        identity['state'] = 'attempted'
+                        save_device(identity)
+                        raise MotionError('先前绑定尚未在设备列表中确认。仅可重新查询，不会重复绑定或提交步数。')
+                    if devices:
+                        save_device({'state': 'unsupported'})
+                        raise MotionError('账号已有设备，但未识别到可用的手环或手表。为避免误绑，未发送绑定请求。')
+                    if identity.get('state') != 'prepared':
+                        identity = new_device_identity()
+                    if action == 'check':
+                        save_device(identity)
+                        flash('已确认设备列表为空。可阅读下方说明后尝试单次虚拟绑定。', 'info')
+                        return redirect(url_for('account.manage_device', id=id))
+                    identity['state'] = 'attempted'
+                    # 先提交本地状态，即使远端响应丢失也不重复发送绑定请求。
+                    save_device(identity)
+                    client.bind_device(identity)
+                    devices = client.get_devices()
+                    if not matching_device(devices, identity):
+                        raise MotionError('绑定请求已返回，但回读未找到同一设备。保持暂停，请稍后重新查询；未提交步数。')
+                    identity['state'] = 'confirmed'
+                    save_device(identity, sync_hold=None)
+                    flash('设备绑定已通过回读确认，尚未提交步数。可返回账号管理手动同步，再核对微信。', 'success')
+                    return redirect(url_for('account.manage_device', id=id))
+                except (MotionError, ValueError) as exc:
+                    db.session.rollback()
+                    if getattr(exc, 'status_code', None) in (401, 403) or getattr(client, 'outcome', None) == 'requires_auth':
+                        MiAccount.query.filter_by(id=id, sync_lock_token=ident).update(
+                            {'token_data': None, 'sync_hold': 'requires_auth'}, synchronize_session=False)
+                        db.session.commit()
+                        errors['form'] = '授权已失效，请先重新授权。设备身份已保留，不会自动重新登录。'
+                    else:
+                        errors['form'] = str(exc)
+                except Exception:
+                    db.session.rollback()
+                    errors['form'] = '设备处理未完成，已保持暂停。请重新查询状态；不会自动重复绑定。'
+                    current_app.logger.error('设备处理异常；未输出凭据或远端响应。')
+                finally:
+                    try:
+                        if client:
+                            client.close()
+                    finally:
+                        MiAccount.query.filter_by(id=id, sync_lock_token=ident).update(
+                            {'sync_lock_token': None, 'sync_lock_until': None}, synchronize_session=False)
+                        db.session.commit()
+                        db.session.refresh(account)
+    return render_template('account/device.html', account=account, device=account.get_device(), errors=errors), 422 if errors else 200
+
+
 @account_bp.route('/account/<int:id>/records')
 @login_required
 def account_records(id):
@@ -252,7 +351,7 @@ def account_records(id):
     if days not in (7, 30, 90):
         days = 7
     status = request.args.get('status', 'all')
-    if status not in ('all', 'success', 'failed', 'requires_auth', 'unknown', 'skipped'):
+    if status not in ('all', 'success', 'failed', 'requires_auth', 'requires_device', 'unknown', 'skipped'):
         status = 'all'
     query = StepRecord.query.filter(StepRecord.account_id == id,
         StepRecord.created_at >= local_day_start(days - 1), StepRecord.created_at <= utcnow())

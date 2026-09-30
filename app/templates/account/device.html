@@ -1,0 +1,27 @@
+{% extends 'base.html' %}
+{% from 'components.html' import error_summary with context %}
+{% block title %}设备管理 · 步数管家{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ url_for('account.list_accounts') }}">← 返回账号管理</a>
+<div class="page-heading"><div><span class="eyebrow">DEVICE / 设备管理</span><h1>先确认设备，再提交步数。</h1><p>{{ account.mi_user }}</p></div></div>
+<section class="panel settings-card">{{ error_summary(errors) }}
+<h2>{{ {'prepared':'尚未绑定设备', 'attempted':'绑定结果待确认', 'confirmed':'虚拟设备已确认', 'available':'已识别绑定设备', 'unsupported':'设备类型未识别'}.get(device.get('state'), '尚未查询设备') }}</h2>
+<p>先查询 Zepp 的设备列表。只有列表为空时才允许尝试虚拟绑定；查询异常会停止操作。设备查询和绑定都不会提交步数，也不会自动重新登录。</p>
+{% if device.get('state') in ('confirmed', 'available') %}<div class="notice info"><span>设备曾通过查询确认，每次提交前仍会重新检查。绑定成功不代表微信步数已更新，请在手动同步后核对微信运动。</span></div>{% endif %}
+{% if device.get('state') == 'attempted' %}<div class="notice warning"><span>绑定请求可能已被 Zepp 接收。为避免重复创建，后续操作只重新查询，不再发送绑定请求。重新授权会保留本次设备身份。</span></div>{% endif %}
+{% if account.sync_hold in ('requires_auth', 'unknown') %}
+<p>请先{{ '重新授权（可能使手机端退出登录）' if account.sync_hold == 'requires_auth' else '核对上次步数提交结果' }}，再继续查询设备。</p>
+<a class="button primary" href="{{ url_for('account.recover_account', id=account.id) }}">{{ '重新授权' if account.sync_hold == 'requires_auth' else '核对结果' }}</a>
+{% else %}
+<form method="post" data-loading-form>{{ csrf() }}<input type="hidden" name="action" value="check">
+<div class="form-actions"><button class="button secondary" type="submit" data-loading-text="正在查询…">重新查询设备</button><a class="button secondary" href="{{ url_for('account.list_accounts') }}">返回账号管理</a></div><p class="form-status" aria-live="polite"></p></form>
+{% if device.get('state') == 'prepared' %}
+<hr><h2>尝试虚拟设备绑定</h2>
+<p>此操作会在 Zepp 账号中尝试创建一个模拟手环记录。这不是官方支持的功能，不能保证微信接收数据，也不能解决手机与脚本的登录冲突。发出一次请求后，只查询同一设备是否出现。</p>
+<form method="post" data-loading-form>{{ csrf() }}<input type="hidden" name="action" value="bind">
+<label class="switch-row"><span>我了解这是实验性功能，确认尝试单次绑定，并在微信核对最终结果</span><input type="checkbox" name="confirmed" required></label>
+<div class="form-actions"><button class="button primary" type="submit" data-loading-text="正在绑定并核对…">单次绑定并核对</button></div><p class="form-status" aria-live="polite"></p></form>
+{% endif %}{% endif %}
+<p class="card-footnote">设备操作会暂停自动同步。确认设备后，可先手动验证，再自行启用计划。</p>
+</section>
+{% endblock %}

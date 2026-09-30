@@ -129,9 +129,10 @@ def execute_sync(app, ident):
             tokens = json.loads(decrypt(account.token_data)) if account.token_data else {}
             factory = app.config.get('MOTION_CLIENT_FACTORY', MiMotion)
             client = factory(account.mi_user, account.get_password(), tokens=tokens)
+            client.virtual_device = account.get_device()
             message, ok = client.sync_step(job.step_count)
             outcome = 'success' if ok else getattr(client, 'outcome', 'failed')
-            if outcome not in ('success', 'failed', 'requires_auth', 'unknown'):
+            if outcome not in ('success', 'failed', 'requires_auth', 'requires_device', 'unknown'):
                 outcome = 'failed'
             # 更新前重新读取，避免过期任务覆盖新任务的锁。
             db.session.expire_all()
@@ -142,7 +143,7 @@ def execute_sync(app, ident):
                 return
             job.status = outcome
             job.message, job.finished_at = message, utcnow()
-            if outcome in ('requires_auth', 'unknown'):
+            if outcome in ('requires_auth', 'requires_device', 'unknown'):
                 account.sync_hold, account.is_active = outcome, False
             if outcome == 'requires_auth':
                 account.token_data = None

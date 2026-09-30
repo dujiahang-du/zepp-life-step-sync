@@ -10,3 +10,9 @@ The static band payload and public protocol constants are derived from the upstr
 Modified 2026-09-30: authentication, scheduling, credential storage, request validation,
 statistics, responsive UI, interaction feedback, testing, dependencies and documentation.
 This notice does not change the Apache-2.0 license.
+
+Device query and experimental binding protocol adapted from sagehere/steps (Apache-2.0),
+revision ea4914039b7699ea839ed2c128a32ae9271076fa.
+https://github.com/sagehere/steps
+Modified 2026-09-30: explicit consent, persistent device identity, single binding attempt,
+matching readback, fail-closed submission and local regression tests.

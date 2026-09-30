@@ -41,7 +41,7 @@ def test_v2_login_encryption_and_read_only_validation():
 
 def test_sync_payload_date_steps_device_and_token():
     session=Mock()
-    session.request.side_effect=[response(data={'message':'success'}),response(data={'items':[{'deviceType':0,'deviceId':'AA:BB:CC:DD:EE:FF'}]}),response(data={'message':'success'})]
+    session.request.side_effect=[response(data={'message':'success'}),response(data={'code':1,'data':[{'deviceType':0,'deviceId':'AA:BB:CC:DD:EE:FF'}]}),response(data={'message':'success'})]
     motion=MiMotion('mail@example.invalid','fixture-password',tokens={'app_token':'app-fixture','user_id':'uid'},session=session)
     message,ok=motion.sync_step(12345)
     assert ok and '12,345' in message
@@ -118,7 +118,8 @@ def test_plaintext_grant_does_not_advertise_encrypted_body(account):
     ('/v2/registrations/tokens','账号认证'),
     ('/v2/client/login','客户端授权'),
     ('/huami.health.getUserInfo.json','令牌校验'),
-    ('/v1/device/binds.json','设备查询'),
+    ('/v1/device/lists.json','设备查询'),
+    ('/v1/device/binds.json','设备绑定'),
     ('/v1/data/band_data.json','步数提交'),
 ])
 def test_http_400_reports_stage_without_disclosing_secrets(path, stage, caplog):
@@ -134,10 +135,10 @@ def test_http_400_reports_stage_without_disclosing_secrets(path, stage, caplog):
 
 
 @pytest.mark.parametrize('failure',[500,502,503,'timeout','invalid_json','invalid_items'])
-def test_device_lookup_failure_falls_back_without_caching_or_retrying_submission(failure):
+def test_device_lookup_failure_stops_without_submission(failure):
     session = Mock()
     def send(method, url, **kwargs):
-        if url.endswith('binds.json'):
+        if url.endswith('lists.json'):
             assert kwargs['headers']['User-Agent'].startswith('MiFit6.14.0')
             if failure == 'timeout':
                 raise requests.Timeout()
@@ -151,11 +152,10 @@ def test_device_lookup_failure_falls_back_without_caching_or_retrying_submission
     session.request.side_effect = send
     motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session)
     message, ok = motion.sync_step(12345)
-    assert ok and '默认设备参数' in message
+    assert not ok
     assert 'bound_device_id' not in motion.tokens
     submits = [c for c in session.request.call_args_list if c.args[1].endswith('band_data.json')]
-    assert len(submits) == 1
-    assert parse_qs(submits[0].kwargs['data'])['last_deviceid'] == ['DA932FFFFE8816E7']
+    assert len(submits) == 0
 
 
 @pytest.mark.parametrize('status',[400,401,403,429])
@@ -167,12 +167,12 @@ def test_device_lookup_client_errors_still_stop_submission(status):
     assert all(not c.args[1].endswith('band_data.json') for c in session.request.call_args_list)
 
 
-def test_fallback_does_not_mask_submission_failure():
+def test_device_server_error_does_not_reach_submission():
     session = Mock()
     session.request.side_effect = [response(data={'message':'success'}),response(500),response(500)]
     message, ok = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session).sync_step(12345)
-    assert not ok and '步数提交' in message and 'HTTP 500' in message
-    assert sum(c.args[1].endswith('band_data.json') for c in session.request.call_args_list) == 1
+    assert not ok and '设备查询' in message and 'HTTP 500' in message
+    assert sum(c.args[1].endswith('band_data.json') for c in session.request.call_args_list) == 0
 
 
 @pytest.mark.parametrize('status',[401,403])
@@ -208,6 +208,8 @@ def test_token_probe_rate_limit_or_server_error_does_not_retry_login(status):
 def test_uncertain_submission_never_retries(failure):
     session = Mock()
     def send(method, url, **kwargs):
+        if url.endswith('lists.json'):
+            return response(data={'code':1,'data':[{'device_type':'0','deviceid':'AA'}]})
         if not url.endswith('band_data.json'):
             return response(data={'message':'success'})
         if failure == 'timeout':
