@@ -96,3 +96,38 @@ def test_invalid_steps_never_send_network():
     session=Mock()
     assert MiMotion('mail@example.invalid','fixture',session=session).sync_step(-1)[1] is False
     session.request.assert_not_called()
+
+
+@pytest.mark.parametrize('account',['13800000000','mail@example.invalid'])
+def test_plaintext_grant_does_not_advertise_encrypted_body(account):
+    session = Mock()
+    session.request.side_effect = login_responses()
+    MiMotion(account, 'fixture-password', session=session).validate_credentials()
+    encrypted, grant = session.request.call_args_list
+    assert encrypted.kwargs['headers']['x-hm-ekv'] == '1'
+    assert isinstance(encrypted.kwargs['data'], bytes)
+    assert 'x-hm-ekv' not in grant.kwargs['headers']
+    assert isinstance(grant.kwargs['data'], dict)
+    assert grant.kwargs['headers']['cv'] == '50818_6.14.0'
+    assert grant.kwargs['headers']['v'] == '2.0'
+    assert grant.kwargs['headers']['x-request-id']
+    assert grant.kwargs['headers']['accept-language'] == 'zh-CN'
+
+
+@pytest.mark.parametrize('path,stage',[
+    ('/v2/registrations/tokens','账号认证'),
+    ('/v2/client/login','客户端授权'),
+    ('/huami.health.getUserInfo.json','令牌校验'),
+    ('/v1/device/binds.json','设备查询'),
+    ('/v1/data/band_data.json','步数提交'),
+])
+def test_http_400_reports_stage_without_disclosing_secrets(path, stage, caplog):
+    session = Mock()
+    session.request.return_value = response(400, data={'password':'private-response-value'})
+    motion = MiMotion('mail@example.invalid','private-password',session=session)
+    with pytest.raises(MotionError) as caught:
+        motion._request('POST','https://example.invalid'+path+'?token=private-query',data='private-body')
+    assert stage in str(caught.value) and 'HTTP 400' in str(caught.value)
+    assert stage in caplog.text
+    for secret in ['private-response-value','private-password','private-query','private-body','mail@example.invalid']:
+        assert secret not in str(caught.value) and secret not in caplog.text

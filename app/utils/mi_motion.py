@@ -1,5 +1,6 @@
 # Modified 2026-09-30: reliability and security improvements; see NOTICE.
 """Zepp Life 协议适配。参考 TonyJiangWJ/mimotion（Apache-2.0）。"""
+import logging
 import re
 import uuid
 from pathlib import Path
@@ -42,6 +43,13 @@ class MiMotion:
         return parse_qs(urlparse(location).query).get('access', [None])[0]
 
     def _request(self, method, url, **kwargs):
+        stage = {
+            '/v2/registrations/tokens': '账号认证',
+            '/v2/client/login': '客户端授权',
+            '/huami.health.getUserInfo.json': '令牌校验',
+            '/v1/device/binds.json': '设备查询',
+            '/v1/data/band_data.json': '步数提交',
+        }.get(urlparse(url).path, '服务请求')
         try:
             response = self.session.request(method, url, timeout=(5, 15), **kwargs)
         except requests.Timeout as exc:
@@ -49,9 +57,13 @@ class MiMotion:
         except requests.RequestException as exc:
             raise MotionError('无法连接 Zepp 服务，请检查网络后重试。') from exc
         if response.status_code not in (200, 303):
+            # 不记录账号、请求体、令牌、响应体或带查询参数的 URL。
+            logging.getLogger(__name__).warning('Zepp request rejected: stage=%s status=%s', stage, response.status_code)
             if response.status_code == 429:
                 raise MotionError('Zepp 请求过于频繁，请稍后再试。')
-            raise MotionError(f'Zepp 服务返回 HTTP {response.status_code}，请稍后重试。')
+            if response.status_code == 400:
+                raise MotionError(f'Zepp 在「{stage}」阶段拒绝了请求（HTTP 400）。请先在 Zepp Life App 确认账号能正常登录；若仍失败，请反馈此阶段名称以检查接口兼容性。')
+            raise MotionError(f'Zepp 在「{stage}」阶段返回 HTTP {response.status_code}，请稍后重试。')
         return response
 
     @staticmethod
@@ -95,7 +107,12 @@ class MiMotion:
             data.update({'allow_registration=': 'false', 'lang': 'zh_CN', 'os_version': '1.5.0',
                          'source': 'com.xiaomi.hm.health:6.14.0:50818',
                          'dn': 'account.zepp.com,api-user.zepp.com,api-mifit.zepp.com,api-watch.zepp.com,app-analytics.zepp.com,api-analytics.huami.com,auth.zepp.com'})
-        result = self._json(self._request('POST', 'https://account.huami.com/v2/client/login', data=data, headers=headers))
+        # 授权接口接收普通表单，不能沿用密文登录请求的 x-hm-ekv 标记。
+        grant_headers = {'app_name': 'com.xiaomi.hm.health', 'x-request-id': str(uuid.uuid4()),
+                         'accept-language': 'zh-CN', 'appname': 'com.xiaomi.hm.health',
+                         'cv': '50818_6.14.0', 'v': '2.0', 'appplatform': 'android_phone',
+                         'content-type': 'application/x-www-form-urlencoded; charset=UTF-8'}
+        result = self._json(self._request('POST', 'https://account.huami.com/v2/client/login', data=data, headers=grant_headers))
         info = result.get('token_info') or {}
         if result.get('result') != 'ok' or not all(info.get(k) for k in ('login_token', 'app_token', 'user_id')):
             raise MotionError('Zepp 授权失败或响应字段缺失，请在 App 确认账号状态后重试。')
