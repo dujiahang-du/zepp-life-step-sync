@@ -10,7 +10,7 @@
     <div class="day-values">{% for day in stats.days %}<div><span>{{ day.date }}</span><strong>{{ day.steps|number }}</strong></div>{% endfor %}</div>
     {% else %}<div class="chart-empty">{{ icon('chart') }}<strong>还没有成功记录</strong><p>完成一次同步后，这里会显示步数趋势。</p></div>{% endif %}
   </section>
-  <section class="panel chart-panel"><div class="section-heading"><div><h2>每日成功率</h2><p>成功次数 ÷ 当日总次数 · 无记录显示「—」</p></div><span class="icon-tile subtle">{{ icon('check') }}</span></div>
+  <section class="panel chart-panel"><div class="section-heading"><div><h2>每日成功率</h2><p>已接受次数 ÷ 确定结果次数 · 无记录显示「—」</p></div><span class="icon-tile subtle">{{ icon('check') }}</span></div>
     <div class="rate-list">{% for day in stats.days %}<div class="rate-row"><span>{{ day.date }}</span><meter min="0" max="100" value="{{ day.rate or 0 }}" aria-label="{{ day.date }} 成功率">{{ day.rate or 0 }}%</meter><strong>{{ (day.rate|string + '%') if day.rate is not none else '—' }}</strong><small>{{ day.ok }}/{{ day.total }} 次</small></div>{% endfor %}</div>
   </section>
 </div>

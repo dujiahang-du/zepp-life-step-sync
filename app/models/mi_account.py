@@ -9,6 +9,7 @@ class MiAccount(db.Model):
     mi_user = db.Column(db.String(120), nullable=False)  # 小米运动账号
     mi_password = db.Column(db.Text, nullable=False)  # 加密后的运动账号密码
     token_data = db.Column(db.Text)
+    sync_hold = db.Column(db.String(16))
     sync_lock_until = db.Column(db.DateTime)
     sync_lock_token = db.Column(db.String(36))
     last_scheduled_slot = db.Column(db.String(16))

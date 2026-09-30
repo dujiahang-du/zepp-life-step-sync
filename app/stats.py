@@ -16,6 +16,8 @@ def statistics(user_id, account_id=None):
         records = StepRecord.query.filter(StepRecord.account_id == selected,
             StepRecord.created_at >= local_day_start(6), StepRecord.created_at <= utcnow()).order_by(StepRecord.created_at).all()
     for record in records:
+        if record.outcome in ('requires_auth', 'unknown', 'skipped'):
+            continue
         bucket = buckets.get(local_time(record.created_at).date())
         if bucket is not None:
             bucket['total'] += 1

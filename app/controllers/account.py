@@ -1,5 +1,6 @@
 # Modified 2026-09-30: reliability and security improvements; see NOTICE.
 import json
+import uuid
 from datetime import timedelta
 from flask import Blueprint, abort, current_app, flash, jsonify, redirect, render_template, request, url_for
 from flask_login import current_user, login_required
@@ -66,6 +67,7 @@ def list_accounts():
             job_state(account.pending_job)
             if account.pending_job.status not in ('queued', 'running'):
                 account.pending_job = None
+                account.latest_record = account.step_records.order_by(StepRecord.id.desc()).first()
     return render_template('account/list.html', accounts=accounts)
 
 
@@ -83,6 +85,8 @@ def add_account():
         password = request.form.get('mi_password', '')
         if not 1 <= len(password) <= 128:
             errors['mi_password'] = '请输入运动账号密码，最长 128 个字符。'
+        if request.form.get('confirm_login') != 'on':
+            errors['form'] = '请确认已了解登录可能使手机端退出，再验证连接。'
         if normalized and MiAccount.query.filter_by(user_id=current_user.id, mi_user=normalized).first():
             errors['mi_user'] = '此运动账号已经添加，请在账号管理中编辑。'
         if current_user.accounts.count() >= 50:
@@ -123,19 +127,11 @@ def edit_account(id):
         password = request.form.get('mi_password', '')
         if len(password) > 128:
             errors['mi_password'] = '密码最长 128 个字符。'
-        tokens = None
-        if password and not errors:
-            try:
-                tokens = check_credentials(account.mi_user, password)
-            except (MotionError, ValueError) as exc:
-                errors['mi_password'] = str(exc)
-            except Exception:
-                errors['form'] = '验证暂时失败，请稍后重试。'
+        if password:
+            errors['mi_password'] = '请使用重新授权页面更新密码，需先确认手机登录影响。'
         if not errors:
-            changes = {**settings, 'is_active': values['is_active']}
-            if password:
-                changes.update(mi_password=encrypt(password), token_data=encrypt(json.dumps(tokens)))
-            if unlocked_query(account).update(changes, synchronize_session=False) != 1:
+            changes = {**settings, 'is_active': values['is_active'] and not account.sync_hold}
+            if unlocked_query(account).filter(MiAccount.sync_hold == account.sync_hold).update(changes, synchronize_session=False) != 1:
                 db.session.rollback()
                 errors['form'] = '账号正在执行，请任务结束后再保存。'
             else:
@@ -149,7 +145,10 @@ def edit_account(id):
 @login_required
 def toggle_account(id):
     account = owned_account(id)
-    if unlocked_query(account).update({'is_active': ~MiAccount.is_active}, synchronize_session=False) != 1:
+    if account.sync_hold:
+        flash('请先重新授权或核对结果，再启用自动同步。', 'warning')
+        return redirect(url_for('account.list_accounts'))
+    if unlocked_query(account).filter(MiAccount.sync_hold.is_(None)).update({'is_active': ~MiAccount.is_active}, synchronize_session=False) != 1:
         db.session.rollback()
         flash('任务正在执行，请结束后再调整自动同步状态。', 'warning')
     else:
@@ -199,6 +198,52 @@ def task_status(id):
     return jsonify(job_state(job))
 
 
+@account_bp.route('/account/<int:id>/recover', methods=['GET', 'POST'])
+@login_required
+def recover_account(id):
+    account = owned_account(id)
+    errors = {}
+    if request.method == 'POST':
+        action = request.form.get('action')
+        if request.form.get('confirmed') != 'on':
+            errors['form'] = '请阅读说明并勾选确认。'
+        elif action not in ('authorize', 'resolve') or (action == 'resolve' and account.sync_hold != 'unknown'):
+            abort(400)
+        else:
+            ident = str(uuid.uuid4())
+            if unlocked_query(account).update({'sync_lock_token': ident,
+                    'sync_lock_until': utcnow() + timedelta(minutes=5)}, synchronize_session=False) != 1:
+                db.session.rollback()
+                errors['form'] = '账号正在执行，请结束后重试。'
+            else:
+                db.session.commit()
+                try:
+                    changes = {'sync_hold': None, 'is_active': False}
+                    if action == 'authorize':
+                        password = request.form.get('mi_password') or account.get_password()
+                        if len(password) > 128:
+                            raise ValueError('密码最长 128 个字符。')
+                        tokens = check_credentials(account.mi_user, password)
+                        changes.update(mi_password=encrypt(password), token_data=encrypt(json.dumps(tokens)))
+                    changes.update(sync_lock_token=None, sync_lock_until=None)
+                    if MiAccount.query.filter_by(id=id, sync_lock_token=ident).update(changes, synchronize_session=False) != 1:
+                        raise ValueError('处理时间过长，请重新加载账号状态。')
+                    db.session.commit()
+                    flash('已恢复手动同步。自动同步仍暂停，可在账号菜单中自行启用。', 'success')
+                    return redirect(url_for('account.list_accounts'))
+                except (MotionError, ValueError) as exc:
+                    db.session.rollback()
+                    errors['form'] = str(exc)
+                except Exception:
+                    db.session.rollback()
+                    errors['form'] = '处理失败，请稍后重试。'
+                finally:
+                    MiAccount.query.filter_by(id=id, sync_lock_token=ident).update(
+                        {'sync_lock_token': None, 'sync_lock_until': None}, synchronize_session=False)
+                    db.session.commit()
+    return render_template('account/recover.html', account=account, errors=errors), 422 if errors else 200
+
+
 @account_bp.route('/account/<int:id>/records')
 @login_required
 def account_records(id):
@@ -207,12 +252,16 @@ def account_records(id):
     if days not in (7, 30, 90):
         days = 7
     status = request.args.get('status', 'all')
-    if status not in ('all', 'success', 'failed'):
+    if status not in ('all', 'success', 'failed', 'requires_auth', 'unknown', 'skipped'):
         status = 'all'
     query = StepRecord.query.filter(StepRecord.account_id == id,
         StepRecord.created_at >= local_day_start(days - 1), StepRecord.created_at <= utcnow())
-    if status != 'all':
-        query = query.filter(StepRecord.status.is_(status == 'success'))
+    if status == 'success':
+        query = query.filter(StepRecord.status.is_(True))
+    elif status == 'failed':
+        query = query.filter(StepRecord.status.is_(False), or_(StepRecord.outcome.is_(None), StepRecord.outcome == 'failed'))
+    elif status != 'all':
+        query = query.filter(StepRecord.outcome == status)
     page = max(1, request.args.get('page', 1, type=int))
     pagination = query.order_by(StepRecord.created_at.desc(), StepRecord.id.desc()).paginate(page=page, per_page=20, error_out=False)
     stats = statistics(current_user.id, id)

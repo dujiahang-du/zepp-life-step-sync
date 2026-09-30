@@ -73,6 +73,6 @@ def signed_in(app, client):
 def add_account(client, **changes):
     values = {'mi_user': 'motion@example.invalid', 'mi_password': 'fixture-password',
               'min_step': '18000', 'max_step': '25000', 'sync_start_hour': '8',
-              'sync_end_hour': '22', 'is_active': 'on', 'csrf_token': 'fixture-csrf'}
+              'sync_end_hour': '22', 'is_active': 'on', 'confirm_login': 'on', 'csrf_token': 'fixture-csrf'}
     values.update(changes)
     return client.post('/account/add', data=values)

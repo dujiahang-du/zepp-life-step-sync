@@ -1,0 +1,22 @@
+{% extends 'base.html' %}
+{% from 'components.html' import error_summary with context %}
+{% block title %}恢复同步 · 步数管家{% endblock %}
+{% block content %}
+<a class="back-link" href="{{ url_for('account.list_accounts') }}">← 返回账号管理</a>
+<div class="page-heading"><div><h1>{{ '核对提交结果' if account.sync_hold == 'unknown' else '重新授权' }}</h1><p>{{ account.mi_user }}</p></div></div>
+<section class="panel settings-card">{{ error_summary(errors) }}
+<form method="post" data-loading-form>{{ csrf() }}
+{% if account.sync_hold == 'unknown' %}
+<input type="hidden" name="action" value="resolve">
+<p>上次提交没有收到明确结果，步数可能已经生效。请先在 Zepp Life 核对，再恢复同步。本操作不会重新登录，也不会提交步数。</p>
+<label class="switch-row"><span>我已核对结果，确认可以恢复手动同步</span><input type="checkbox" name="confirmed" required></label>
+{% else %}
+<input type="hidden" name="action" value="authorize">
+<p>此操作会使用账号密码重新登录 Zepp，可能使手机上的 Zepp Life 退出登录。常规同步仅复用已有授权，授权失效后会暂停，不会自动重新登录。</p>
+<div class="field"><label for="mi_password">新的运动账号密码（留空使用已保存密码）</label><input id="mi_password" name="mi_password" type="password" maxlength="128" autocomplete="off"></div>
+<label class="switch-row"><span>我了解手机端可能退出，确认重新授权</span><input type="checkbox" name="confirmed" required></label>
+{% endif %}
+<p>处理完成后，自动同步仍保持暂停，需要你另行启用。</p>
+<div class="form-actions"><a class="button secondary" href="{{ url_for('account.list_accounts') }}">取消</a><button type="submit" class="button primary">{{ '确认已核对' if account.sync_hold == 'unknown' else '确认重新授权' }}</button></div><p class="form-status" aria-live="polite"></p>
+</form></section>
+{% endblock %}

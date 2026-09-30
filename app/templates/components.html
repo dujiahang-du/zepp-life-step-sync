@@ -26,4 +26,4 @@
 
 {% macro error_summary(errors) %}{% if errors %}<div class="notice danger error-summary" role="alert" tabindex="-1" data-error-summary><strong>请检查以下内容</strong><ul>{% for key, message in errors.items() %}<li>{% if key != 'form' %}<a href="#{{ key }}">{{ message }}</a>{% else %}{{ message }}{% endif %}</li>{% endfor %}</ul></div>{% endif %}{% endmacro %}
 
-{% macro badge(ok) %}<span class="badge {{ 'success' if ok else 'danger' }}">{{ icon('check' if ok else 'info') }}{{ '已接受' if ok else '失败' }}</span>{% endmacro %}
+{% macro badge(ok, outcome=None) %}{% if outcome in ('requires_auth', 'unknown', 'skipped') %}<span class="badge info">{{ {'requires_auth':'需要授权', 'unknown':'结果待确认', 'skipped':'已跳过'}[outcome] }}</span>{% else %}<span class="badge {{ 'success' if ok else 'danger' }}">{{ icon('check' if ok else 'info') }}{{ '已接受' if ok else '失败' }}</span>{% endif %}{% endmacro %}

@@ -137,7 +137,7 @@ def test_cross_user_cannot_access_or_mutate(app, signed_in):
         session['_user_id'] = str(ident)
     for path in ('/account/1/edit','/account/1/records','/api/account/1/stats','/?account=1',response.json['status_url']):
         assert signed_in.get(path).status_code == 404
-    for action in ('edit','delete','sync','toggle'):
+    for action in ('edit','delete','sync','toggle','recover'):
         assert signed_in.post('/account/1/'+action,data={'csrf_token':'fixture-csrf'}).status_code == 404
 
 
@@ -184,14 +184,14 @@ def test_busy_account_cannot_be_edited_or_deleted(app, signed_in):
         assert MiAccount.query.count() == 1
 
 
-def test_stale_job_becomes_failed_once(app, signed_in):
+def test_stale_job_becomes_unknown_once(app, signed_in):
     add_account(signed_in)
     with app.app_context():
         db.session.add(SyncJob(id='stale',account_id=1,status='running',created_at=utcnow()-timedelta(minutes=6)))
         db.session.get(MiAccount,1).sync_lock_token='stale'
         db.session.commit()
-    assert signed_in.get('/api/tasks/stale').json['status'] == 'failed'
-    assert signed_in.get('/api/tasks/stale').json['status'] == 'failed'
+    assert signed_in.get('/api/tasks/stale').json['status'] == 'unknown'
+    assert signed_in.get('/api/tasks/stale').json['status'] == 'unknown'
     with app.app_context():
         assert StepRecord.query.count() == 1
 
@@ -258,3 +258,99 @@ def test_async_busy_guard_and_capacity_recovery(app, signed_in):
     assert not capacity.acquire(blocking=False)
     for _ in range(4):
         capacity.release()
+
+
+def test_login_confirmation_required_before_remote(signed_in):
+    assert add_account(signed_in, confirm_login='').status_code == 422
+    assert FakeMotion.calls == []
+
+
+def test_auth_hold_blocks_sync_toggle_and_edit_until_explicit_recovery(app, signed_in):
+    add_account(signed_in)
+    class ExpiredMotion(FakeMotion):
+        outcome = 'requires_auth'
+        result = ('授权已失效', False)
+    app.config['MOTION_CLIENT_FACTORY'] = ExpiredMotion
+    response = signed_in.post('/account/1/sync',json={},headers={'X-CSRF-Token':'fixture-csrf'})
+    assert signed_in.get(response.json['status_url']).json['status'] == 'requires_auth'
+    with app.app_context():
+        account = db.session.get(MiAccount, 1)
+        assert not account.is_active and account.sync_hold == 'requires_auth'
+        assert account.token_data is None
+        assert StepRecord.query.first().outcome == 'requires_auth'
+    assert signed_in.post('/account/1/sync',json={},headers={'X-CSRF-Token':'fixture-csrf'}).status_code == 409
+    signed_in.post('/account/1/toggle',data={'csrf_token':'fixture-csrf'})
+    signed_in.post('/account/1/edit', data={'csrf_token':'fixture-csrf','min_step':'1000','max_step':'2000','sync_start_hour':'0','sync_end_hour':'23','is_active':'on'})
+    with app.app_context():
+        assert not db.session.get(MiAccount,1).is_active
+    FakeMotion.calls.clear()
+    assert signed_in.get('/account/1/recover').status_code == 200
+    assert signed_in.post('/account/1/recover',data={'csrf_token':'fixture-csrf','action':'authorize'}).status_code == 422
+    assert FakeMotion.calls == []
+    app.config['MOTION_CLIENT_FACTORY'] = FakeMotion
+    assert signed_in.post('/account/1/recover',data={'csrf_token':'fixture-csrf','action':'authorize','confirmed':'on'}).status_code == 302
+    assert FakeMotion.calls == [('validate','motion@example.invalid')]
+    with app.app_context():
+        account = db.session.get(MiAccount,1)
+        assert account.sync_hold is None and not account.is_active and account.token_data
+
+
+def test_unknown_recovery_does_not_login_or_resubmit(app, signed_in):
+    add_account(signed_in)
+    class UnknownMotion(FakeMotion):
+        outcome = 'unknown'
+        result = ('结果待确认', False)
+    app.config['MOTION_CLIENT_FACTORY'] = UnknownMotion
+    response = signed_in.post('/account/1/sync',json={},headers={'X-CSRF-Token':'fixture-csrf'})
+    assert signed_in.get(response.json['status_url']).json['status'] == 'unknown'
+    assert signed_in.get('/api/account/1/stats').json['success_rate'][-1] is None
+    assert '结果待确认' in signed_in.get('/account/1/records').text
+    FakeMotion.calls.clear()
+    assert signed_in.post('/account/1/recover',data={'csrf_token':'fixture-csrf','action':'resolve','confirmed':'on'}).status_code == 302
+    assert FakeMotion.calls == []
+    with app.app_context():
+        account = db.session.get(MiAccount,1)
+        assert account.sync_hold is None and not account.is_active
+
+
+def test_queue_full_records_one_skip_per_slot(app, signed_in):
+    from unittest.mock import Mock
+    from app.scheduler.tasks import sync_steps
+    add_account(signed_in,sync_start_hour='0',sync_end_hour='23')
+    capacity = Mock()
+    capacity.acquire.return_value = False
+    app.extensions['motion_capacity'] = capacity
+    sync_steps(app)
+    sync_steps(app)
+    with app.app_context():
+        assert SyncJob.query.count() == 0
+        assert StepRecord.query.count() == 1
+        assert StepRecord.query.first().outcome == 'skipped'
+    assert signed_in.get('/api/account/1/stats').json['success_rate'][-1] is None
+
+
+def test_expired_job_blocks_scheduler_before_another_submission(app, signed_in):
+    from app.scheduler.tasks import sync_steps
+    add_account(signed_in,sync_start_hour='0',sync_end_hour='23')
+    with app.app_context():
+        db.session.add(SyncJob(id='stale-schedule',account_id=1,status='running',created_at=utcnow()-timedelta(minutes=6)))
+        account = db.session.get(MiAccount,1)
+        account.sync_lock_token = 'stale-schedule'
+        account.sync_lock_until = utcnow()-timedelta(minutes=1)
+        db.session.commit()
+    FakeMotion.calls.clear()
+    sync_steps(app)
+    assert FakeMotion.calls == []
+    with app.app_context():
+        assert db.session.get(MiAccount,1).sync_hold == 'unknown'
+        assert SyncJob.query.count() == 1
+
+
+def test_busy_account_cannot_reauthorize(app, signed_in):
+    add_account(signed_in)
+    with app.app_context():
+        db.session.get(MiAccount,1).sync_lock_until = utcnow()+timedelta(minutes=1)
+        db.session.commit()
+    FakeMotion.calls.clear()
+    assert signed_in.post('/account/1/recover',data={'csrf_token':'fixture-csrf','action':'authorize','confirmed':'on'}).status_code == 422
+    assert FakeMotion.calls == []

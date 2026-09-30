@@ -76,7 +76,11 @@ document.querySelectorAll('[data-loading-form]').forEach(form => {
     form.querySelector('.form-status').textContent = form === accountForm ? '正在处理，请保持页面打开。验证连接不会提交步数。' : '正在处理，请稍候。';
   });
 });
-window.addEventListener('pageshow', () => {
+window.addEventListener('pageshow', event => {
+  if (event.persisted && !document.querySelector('[data-loading-form]')) {
+    window.location.reload();
+    return;
+  }
   document.querySelectorAll('[data-loading-form][data-busy]').forEach(form => {
     delete form.dataset.busy;
     const button = form.querySelector('button[type="submit"]');
@@ -89,7 +93,7 @@ window.addEventListener('pageshow', () => {
 const dialog = document.getElementById('confirm-dialog');
 let pendingDelete = null;
 let deleteTrigger = null;
-document.querySelectorAll('[data-confirm-delete]').forEach(form => {
+function bindDeleteForm(form) {
   form.addEventListener('submit', event => {
     if (form.dataset.confirmed === 'yes') return;
     event.preventDefault();
@@ -98,7 +102,8 @@ document.querySelectorAll('[data-confirm-delete]').forEach(form => {
     dialog.showModal();
     dialog.querySelector('[data-confirm-cancel]').focus();
   });
-});
+}
+document.querySelectorAll('[data-confirm-delete]').forEach(bindDeleteForm);
 dialog?.querySelector('[data-confirm-cancel]').addEventListener('click', () => dialog.close());
 dialog?.addEventListener('close', () => {
   const menu = deleteTrigger?.closest('details');
@@ -116,7 +121,7 @@ function showTask(card, message, state, recovery = false) {
   const status = card.querySelector('[data-task-status]');
   const badge = document.createElement('span');
   badge.className = 'badge ' + (state === 'success' ? 'success' : state === 'failed' ? 'danger' : 'info');
-  badge.textContent = ({success:'已接受', failed:'执行失败', running:'执行中', queued:'等待执行', unknown:'待确认'})[state] || '待确认';
+  badge.textContent = ({success:'已接受', failed:'执行失败', running:'执行中', queued:'等待执行', unknown:'结果待确认', requires_auth:'需要授权', skipped:'已跳过'})[state] || '待确认';
   const text = document.createElement('p');
   text.textContent = message;
   status.replaceChildren(badge, text);
@@ -149,9 +154,16 @@ async function pollJob(card, url, attempts = 0) {
   try {
     const result = await requestJson(url);
     showTask(card, result.message, result.status);
-    if (result.status === 'success' || result.status === 'failed') {
-      buttonState(card, false);
+    if (['success', 'failed', 'requires_auth', 'unknown', 'skipped'].includes(result.status)) {
       delete card.dataset.pendingJob;
+      const response = await fetch('/accounts', {credentials:'same-origin', cache:'no-store', signal:AbortSignal.timeout(15000)});
+      if (!response.ok) throw new Error('结果已返回，请重新加载账号状态。');
+      const page = new DOMParser().parseFromString(await response.text(), 'text/html');
+      const fresh = Array.from(page.querySelectorAll('[data-account-id]')).find(el => el.dataset.accountId === card.dataset.accountId);
+      if (!fresh) throw new Error('无法刷新账号卡片，请重新加载页面。');
+      card.replaceWith(fresh);
+      bindSyncForm(fresh.querySelector('[data-sync-form]'));
+      bindDeleteForm(fresh.querySelector('[data-confirm-delete]'));
       return;
     }
     if (attempts >= 160) throw new Error('暂未收到最终结果，请重新加载状态，避免重复提交。');
@@ -161,7 +173,7 @@ async function pollJob(card, url, attempts = 0) {
     buttonState(card, true);
   }
 }
-document.querySelectorAll('[data-sync-form]').forEach(form => {
+function bindSyncForm(form) {
   form.addEventListener('submit', async event => {
     event.preventDefault();
     const card = form.closest('[data-account-id]');
@@ -176,5 +188,6 @@ document.querySelectorAll('[data-sync-form]').forEach(form => {
       buttonState(card, true);
     }
   });
-});
+}
+document.querySelectorAll('[data-sync-form]').forEach(bindSyncForm);
 document.querySelectorAll('[data-pending-job]').forEach(card => {buttonState(card, true); pollJob(card, card.dataset.pendingJob);});

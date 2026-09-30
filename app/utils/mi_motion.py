@@ -28,6 +28,7 @@ class MiMotion:
         self.session = session or requests.Session()
         self.device_id = self.tokens.get('device_id') or str(uuid.uuid4())
         self.device_lookup_fallback = False
+        self.outcome = 'failed'
 
     @staticmethod
     def get_beijing_time():
@@ -79,7 +80,7 @@ class MiMotion:
             raise MotionError('Zepp 返回的数据格式异常。')
         return result
 
-    def login(self):
+    def login(self, *, allow_password=False):
         app_token = self.tokens.get('app_token')
         if app_token and self.tokens.get('user_id'):
             params = {'r': str(uuid.uuid4()), 'userid': self.tokens['user_id'],
@@ -98,11 +99,13 @@ class MiMotion:
             except MotionError as exc:
                 if exc.status_code not in (401, 403):
                     raise
-                logging.getLogger(__name__).info('Zepp cached token rejected; authenticating once')
             else:
                 if response.get('message') == 'success':
                     return self.tokens.get('login_token'), self.tokens['user_id']
             self.tokens = {}
+        if not allow_password:
+            self.outcome = 'requires_auth'
+            raise MotionError('授权已失效或尚未建立，已暂停同步。请手动重新授权；重新登录可能使手机端退出。')
         values = {'emailOrPhone': self.user, 'password': self.password, 'state': 'REDIRECTION',
                   'client_id': 'HuaMi', 'country_code': 'CN', 'token': 'access',
                   'redirect_uri': 'https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html'}
@@ -146,7 +149,7 @@ class MiMotion:
         return self.tokens['app_token']
 
     def validate_credentials(self):
-        self.login()
+        self.login(allow_password=True)
         return self.tokens
 
     def _bound_device(self):
@@ -178,6 +181,8 @@ class MiMotion:
         return 'DA932FFFFE8816E7'
 
     def sync_step(self, step_count):
+        self.outcome = 'failed'
+        submitting = False
         if not isinstance(step_count, int) or not 0 <= step_count <= 98800:
             return '步数必须为 0–98800 的整数。', False
         try:
@@ -189,14 +194,25 @@ class MiMotion:
             payload = payload.replace('DA932FFFFE8816E7', device)
             body = urlencode({'userid': self.tokens['user_id'], 'last_sync_data_time': '1597306380',
                               'device_type': '0', 'last_deviceid': device}) + '&data_json=' + payload
+            submitting = True
             response = self._json(self._request('POST', 'https://api-mifit-cn.huami.com/v1/data/band_data.json',
                 params={'t': self.get_time(), 'r': str(uuid.uuid4())}, data=body,
                 headers={'apptoken': self.tokens['app_token'], 'Content-Type': 'application/x-www-form-urlencoded'}))
             if response.get('message') == 'success':
+                self.outcome = 'success'
                 note = '未获取到绑定设备，已使用默认设备参数。' if self.device_lookup_fallback else ''
                 return f'Zepp 已接受 {step_count:,} 步；{note}微信／支付宝展示请在对应 App 核对。', True
+            if not response.get('message'):
+                raise MotionError('Zepp 提交响应缺少结果字段。')
             return 'Zepp 未接受本次提交，请检查账号、绑定设备与 App 状态后重试。', False
         except MotionError as exc:
+            if exc.status_code in (401, 403):
+                self.tokens = {}
+                self.outcome = 'requires_auth'
+                return '授权已失效，已暂停同步。请手动重新授权；重新登录可能使手机端退出。', False
+            if submitting and (exc.status_code is None or exc.status_code >= 500):
+                self.outcome = 'unknown'
+                return '提交结果待确认，已暂停同步。请先在 Zepp Life 核对步数，再确认恢复。' + str(exc), False
             return str(exc), False
         finally:
             self.close()

@@ -47,10 +47,25 @@ def next_run(account):
 
 
 def submit_sync(account, source='manual'):
+    pending = SyncJob.query.filter_by(account_id=account.id).filter(SyncJob.status.in_(('queued', 'running'))).all()
+    for job in pending:
+        job_state(job)
+    db.session.refresh(account)
+    if account.sync_hold:
+        raise BusyError('账号已暂停，请先在账号卡片完成重新授权或核对提交结果。')
     app = current_app._get_current_object()
     capacity = app.extensions['motion_capacity']
     acquired = capacity.acquire(timeout=120) if source == 'scheduled' else capacity.acquire(blocking=False)
     if not acquired:
+        if source == 'scheduled':
+            slot = local_now().strftime('%Y-%m-%d %H')
+            changed = MiAccount.query.filter(MiAccount.id == account.id, MiAccount.is_active.is_(True),
+                MiAccount.sync_hold.is_(None), or_(MiAccount.last_scheduled_slot.is_(None),
+                MiAccount.last_scheduled_slot != slot)).update({'last_scheduled_slot': slot}, synchronize_session=False)
+            if changed:
+                db.session.add(StepRecord(account_id=account.id, step_count=0, status=False,
+                    outcome='skipped', source='scheduled', message='执行队列已满，本时段计划已跳过；未向 Zepp 提交。'))
+            db.session.commit()
         raise BusyError('执行队列已满，请稍后重试。')
     handed_off = False
     try:
@@ -61,7 +76,7 @@ def submit_sync(account, source='manual'):
                 raise BusyError('刚刚已提交任务，请等待至少 30 秒再试。')
         ident = str(uuid.uuid4())
         slot = local_now().strftime('%Y-%m-%d %H')
-        query = MiAccount.query.filter(MiAccount.id == account.id,
+        query = MiAccount.query.filter(MiAccount.id == account.id, MiAccount.sync_hold.is_(None),
             or_(MiAccount.sync_lock_until.is_(None), MiAccount.sync_lock_until <= now))
         values = {'sync_lock_until': now + timedelta(minutes=5), 'sync_lock_token': ident}
         if source == 'scheduled':
@@ -115,6 +130,9 @@ def execute_sync(app, ident):
             factory = app.config.get('MOTION_CLIENT_FACTORY', MiMotion)
             client = factory(account.mi_user, account.get_password(), tokens=tokens)
             message, ok = client.sync_step(job.step_count)
+            outcome = 'success' if ok else getattr(client, 'outcome', 'failed')
+            if outcome not in ('success', 'failed', 'requires_auth', 'unknown'):
+                outcome = 'failed'
             # 更新前重新读取，避免过期任务覆盖新任务的锁。
             db.session.expire_all()
             claimed = MiAccount.query.filter_by(id=account.id, sync_lock_token=ident).update(
@@ -122,12 +140,16 @@ def execute_sync(app, ident):
             if claimed != 1:
                 db.session.rollback()
                 return
-            job.status = 'success' if ok else 'failed'
+            job.status = outcome
             job.message, job.finished_at = message, utcnow()
-            if client.tokens:
+            if outcome in ('requires_auth', 'unknown'):
+                account.sync_hold, account.is_active = outcome, False
+            if outcome == 'requires_auth':
+                account.token_data = None
+            elif client.tokens:
                 account.token_data = encrypt(json.dumps(client.tokens))
             db.session.add(StepRecord(account_id=account.id, step_count=job.step_count,
-                                      status=ok, message=message, source=job.source))
+                                      status=ok, outcome=outcome, message=message, source=job.source))
             db.session.commit()
         except Exception:
             db.session.rollback()
@@ -135,9 +157,10 @@ def execute_sync(app, ident):
             job = db.session.get(SyncJob, ident)
             if job and MiAccount.query.filter_by(id=job.account_id, sync_lock_token=ident).update(
                     {'sync_lock_until': None, 'sync_lock_token': None}, synchronize_session=False) == 1:
-                job.status, job.message, job.finished_at = 'failed', '执行失败，请检查凭据、网络或服务日志后重试。', utcnow()
+                job.status, job.message, job.finished_at = 'unknown', '执行中断，结果待确认。请先核对 Zepp Life 步数，再恢复同步。', utcnow()
+                MiAccount.query.filter_by(id=job.account_id).update({'sync_hold': 'unknown', 'is_active': False})
                 db.session.add(StepRecord(account_id=job.account_id, step_count=job.step_count or 0,
-                                          status=False, message=job.message, source=job.source))
+                                          status=False, outcome='unknown', message=job.message, source=job.source))
                 db.session.commit()
         finally:
             try:
@@ -151,10 +174,10 @@ def job_state(job):
     if job.status in ('queued', 'running') and job.created_at < utcnow() - timedelta(minutes=5):
         message = '任务已超时或服务曾重启，请在 Zepp App 核对结果后重试。'
         changed = SyncJob.query.filter(SyncJob.id == job.id, SyncJob.status.in_(('queued', 'running'))).update(
-            {'status': 'failed', 'message': message, 'finished_at': utcnow()}, synchronize_session=False)
+            {'status': 'unknown', 'message': message, 'finished_at': utcnow()}, synchronize_session=False)
         if changed:
-            MiAccount.query.filter_by(id=job.account_id, sync_lock_token=job.id).update({'sync_lock_until': None, 'sync_lock_token': None})
-            db.session.add(StepRecord(account_id=job.account_id, step_count=job.step_count or 0, status=False, message=message, source=job.source))
+            MiAccount.query.filter_by(id=job.account_id, sync_lock_token=job.id).update({'sync_lock_until': None, 'sync_lock_token': None, 'sync_hold': 'unknown', 'is_active': False})
+            db.session.add(StepRecord(account_id=job.account_id, step_count=job.step_count or 0, status=False, outcome='unknown', message=message, source=job.source))
         db.session.commit()
         db.session.refresh(job)
     return {'id': job.id, 'status': job.status, 'message': job.message, 'step_count': job.step_count}

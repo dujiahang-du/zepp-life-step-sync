@@ -2,6 +2,7 @@
 from flask import Blueprint, abort, render_template, request
 from flask_login import current_user
 from app import db
+from sqlalchemy import or_
 from app.models import MiAccount, StepRecord
 from app.stats import statistics, trend_points
 from app.time_utils import local_day_start, utcnow
@@ -20,7 +21,7 @@ def index():
     accounts = stats['accounts']
     today = StepRecord.query.join(MiAccount).filter(MiAccount.user_id == current_user.id,
         StepRecord.created_at >= local_day_start(), StepRecord.created_at <= utcnow())
-    total = today.count()
+    total = today.filter(or_(StepRecord.outcome.is_(None), StepRecord.outcome.in_(('success', 'failed')))).count()
     success = today.filter(StepRecord.status.is_(True)).count()
     recent = StepRecord.query.join(MiAccount).filter(MiAccount.user_id == current_user.id).order_by(StepRecord.created_at.desc(), StepRecord.id.desc()).limit(8).all()
     return render_template('dashboard.html', accounts=accounts, total_accounts=len(accounts),

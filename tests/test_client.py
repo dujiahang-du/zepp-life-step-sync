@@ -41,8 +41,8 @@ def test_v2_login_encryption_and_read_only_validation():
 
 def test_sync_payload_date_steps_device_and_token():
     session=Mock()
-    session.request.side_effect=login_responses()+[response(data={'items':[{'deviceType':0,'deviceId':'AA:BB:CC:DD:EE:FF'}]}),response(data={'message':'success'})]
-    motion=MiMotion('mail@example.invalid','fixture-password',session=session)
+    session.request.side_effect=[response(data={'message':'success'}),response(data={'items':[{'deviceType':0,'deviceId':'AA:BB:CC:DD:EE:FF'}]}),response(data={'message':'success'})]
+    motion=MiMotion('mail@example.invalid','fixture-password',tokens={'app_token':'app-fixture','user_id':'uid'},session=session)
     message,ok=motion.sync_step(12345)
     assert ok and '12,345' in message
     call=session.request.call_args_list[-1]
@@ -176,30 +176,23 @@ def test_fallback_does_not_mask_submission_failure():
 
 
 @pytest.mark.parametrize('status',[401,403])
-def test_cached_token_http_rejection_reauthenticates_once_and_completes(status):
+def test_cached_token_rejection_pauses_without_password_login(status):
     session = Mock()
-    session.request.side_effect = [response(status)] + login_responses() + [response(500), response(data={'message':'success'})]
-    motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'expired-fixture','user_id':'actual-fixture-user'},session=session)
-    message, ok = motion.sync_step(12345)
-    assert ok
-    calls = session.request.call_args_list
-    assert calls[0].kwargs['params']['userid'] == 'actual-fixture-user'
-    assert calls[0].kwargs['params']['appid'] == calls[0].kwargs['headers']['clientid']
-    assert calls[0].kwargs['headers']['User-Agent'].startswith('MiFit6.14.0')
-    assert sum(c.args[1].endswith('/v2/registrations/tokens') for c in calls) == 1
-    assert sum(c.args[1].endswith('band_data.json') for c in calls) == 1
-    assert calls[-1].kwargs['headers']['apptoken'] == 'app-fixture'
-    assert motion.tokens['app_token'] == 'app-fixture'
-
-
-def test_reauthentication_failure_does_not_loop_or_submit():
-    session = Mock()
-    session.request.side_effect = [response(401),response(401)]
+    session.request.return_value = response(status)
     motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'expired','user_id':'uid'},session=session)
     message, ok = motion.sync_step(12345)
-    assert not ok and '账号认证' in message and 'HTTP 401' in message
-    assert session.request.call_count == 2
+    assert not ok and motion.outcome == 'requires_auth'
     assert not motion.tokens
+    assert session.request.call_count == 1
+    assert session.request.call_args.args[0] == 'GET'
+
+
+def test_missing_token_never_uses_password_during_sync():
+    session = Mock()
+    motion = MiMotion('mail@example.invalid','fixture',session=session)
+    assert not motion.sync_step(12345)[1]
+    assert motion.outcome == 'requires_auth'
+    session.request.assert_not_called()
 
 
 @pytest.mark.parametrize('status',[429,500])
@@ -209,3 +202,26 @@ def test_token_probe_rate_limit_or_server_error_does_not_retry_login(status):
     motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session)
     assert motion.sync_step(12345)[1] is False
     assert session.request.call_count == 1
+
+
+@pytest.mark.parametrize('failure',['timeout','connection','malformed','missing_result',500,503])
+def test_uncertain_submission_never_retries(failure):
+    session = Mock()
+    def send(method, url, **kwargs):
+        if not url.endswith('band_data.json'):
+            return response(data={'message':'success'})
+        if failure == 'timeout':
+            raise requests.Timeout()
+        if failure == 'connection':
+            raise requests.ConnectionError('private-url')
+        if failure == 'malformed':
+            bad=response();bad.json.side_effect=ValueError('private-body');return bad
+        if failure == 'missing_result':
+            return response(data={})
+        return response(failure)
+    session.request.side_effect = send
+    motion=MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid','bound_device_id':'AA'},session=session)
+    message,ok=motion.sync_step(12345)
+    assert not ok and motion.outcome == 'unknown'
+    assert 'private' not in message
+    assert sum(c.args[1].endswith('band_data.json') for c in session.request.call_args_list) == 1

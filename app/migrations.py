@@ -11,8 +11,9 @@ def upgrade(app):
     inspector = inspect(db.engine)
     additions = {
         'mi_account': {'token_data': 'TEXT', 'sync_lock_until': 'DATETIME', 'sync_lock_token': 'VARCHAR(36)', 'last_scheduled_slot': 'VARCHAR(16)'},
-        'step_record': {'source': "VARCHAR(16) DEFAULT 'manual'"},
+        'step_record': {'source': "VARCHAR(16) DEFAULT 'manual'", 'outcome': 'VARCHAR(16)'},
     }
+    additions['mi_account']['sync_hold'] = 'VARCHAR(16)'
     pending = []
     for table, fields in additions.items():
         if inspector.has_table(table):
