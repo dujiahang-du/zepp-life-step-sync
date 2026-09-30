@@ -1,0 +1,9 @@
+{# Modified 2026-09-30: UI and interaction redesign; see NOTICE. #}
+{% extends 'base.html' %}
+{% block content %}
+<section class="landing">
+ <div class="landing-copy"><span class="eyebrow">你的个人同步工作台</span><h1>账号有序，<br>每次同步都有记录。</h1><p>连接 Zepp Life，管理自动同步计划，查看每一次执行结果。少一点重复操作，多一点清晰掌握。</p><div class="button-row"><a class="button primary large" href="{{ url_for('auth.register') if config.ALLOW_REGISTRATION else url_for('auth.login') }}">{{ '创建管理账号' if config.ALLOW_REGISTRATION else '登录管理账号' }} {{ icon('arrow') }}</a><a class="button secondary large" href="{{ url_for('auth.login') }}">已有账号，登录</a></div><div class="landing-trust">{{ icon('shield') }}凭据本地加密 {{ icon('clock') }}计划按北京时间执行</div></div>
+ <div class="landing-preview panel" aria-label="功能示意，非真实运行数据"><div class="preview-heading"><span class="status-dot"></span>工作台预览<span class="badge muted">示意</span></div><div class="preview-title">一切，清清楚楚。<p>连接账号 → 设置计划 → 查看结果</p></div><div class="preview-flow"><div><span class="icon-tile">{{ icon('users') }}</span><strong>你的运动账号</strong><small>独立设置，各自管理</small></div><div><span class="icon-tile amber">{{ icon('clock') }}</span><strong>你的同步节奏</strong><small>时间窗口，自由调整</small></div><div><span class="icon-tile blue">{{ icon('chart') }}</span><strong>你的执行记录</strong><small>成功或失败，有据可查</small></div></div></div>
+</section>
+<section class="feature-grid"><article><span class="step-number">01</span><h2>先连接，再执行</h2><p>添加时只验证账号，保存不会立即提交步数。</p></article><article><span class="step-number">02</span><h2>手动与自动，都可控</h2><p>可以随时暂停自动计划，手动执行有进度反馈。</p></article><article><span class="step-number">03</span><h2>看懂每一次结果</h2><p>按账号查看趋势与记录，失败时获得下一步提示。</p></article></section>
+{% endblock %}

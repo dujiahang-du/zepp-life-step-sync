@@ -1,0 +1,16 @@
+<div class="chart-grid">
+  <section class="panel chart-panel"><div class="section-heading"><div><h2>步数趋势</h2><p>最近 7 天 · 每天最后一次被 Zepp 接受的步数</p></div><span class="icon-tile subtle">{{ icon('chart') }}</span></div>
+    {% if stats.has_data %}
+    <svg class="trend-chart" viewBox="0 0 532 214" role="img" aria-label="最近七天步数趋势，详细数值见下方日期列表">
+      <path class="chart-grid-line" d="M32 38H500M32 105H500M32 172H500"/><text x="32" y="22" class="chart-label">{{ trend.maximum|number }} 步</text>
+      {% for segment in trend.segments %}<polyline class="chart-line" points="{{ segment }}"/>{% endfor %}
+      {% for dot in trend.dots %}<circle class="chart-dot" cx="{{ dot.x }}" cy="{{ dot.y }}" r="4"><title>{{ dot.date }}：{{ dot.step|number }} 步</title></circle>{% endfor %}
+      {% for date in stats.dates %}<text class="chart-label chart-date" x="{{ 32 + loop.index0 * 78 }}" y="202" text-anchor="middle">{{ date }}</text>{% endfor %}
+    </svg>
+    <div class="day-values">{% for day in stats.days %}<div><span>{{ day.date }}</span><strong>{{ day.steps|number }}</strong></div>{% endfor %}</div>
+    {% else %}<div class="chart-empty">{{ icon('chart') }}<strong>还没有成功记录</strong><p>完成一次同步后，这里会显示步数趋势。</p></div>{% endif %}
+  </section>
+  <section class="panel chart-panel"><div class="section-heading"><div><h2>每日成功率</h2><p>成功次数 ÷ 当日总次数 · 无记录显示「—」</p></div><span class="icon-tile subtle">{{ icon('check') }}</span></div>
+    <div class="rate-list">{% for day in stats.days %}<div class="rate-row"><span>{{ day.date }}</span><meter min="0" max="100" value="{{ day.rate or 0 }}" aria-label="{{ day.date }} 成功率">{{ day.rate or 0 }}%</meter><strong>{{ (day.rate|string + '%') if day.rate is not none else '—' }}</strong><small>{{ day.ok }}/{{ day.total }} 次</small></div>{% endfor %}</div>
+  </section>
+</div>

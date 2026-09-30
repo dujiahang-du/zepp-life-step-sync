@@ -1,0 +1,12 @@
+StepSync
+
+Derived from CoderXiaopang/mimotion-web (Apache-2.0).
+https://github.com/CoderXiaopang/mimotion-web
+
+Zepp protocol adaptation references TonyJiangWJ/mimotion (Apache-2.0), revision 7bbac81.
+https://github.com/TonyJiangWJ/mimotion
+The static band payload and public protocol constants are derived from the upstream implementation, not from local user data.
+
+Modified 2026-09-30: authentication, scheduling, credential storage, request validation,
+statistics, responsive UI, interaction feedback, testing, dependencies and documentation.
+This notice does not change the Apache-2.0 license.

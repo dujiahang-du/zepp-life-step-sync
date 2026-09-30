@@ -1,0 +1,3 @@
+{% extends 'base.html' %}
+{% block title %}{{ code }} · 步数管家{% endblock %}
+{% block content %}<section class="empty-state panel"><span class="eyebrow">{{ code }}</span><h1>暂时无法完成操作</h1><p>{{ message }}</p><a class="button primary" href="{{ url_for('main.index') }}">返回首页 {{ icon('arrow') }}</a></section>{% endblock %}

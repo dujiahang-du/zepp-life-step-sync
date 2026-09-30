@@ -1,0 +1,16 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+instance/
+app/logs/
+.env
+*.local.*
+artifacts/
+.DS_Store
+*.db
+*.db-*
+*.sqlite*
+*.log
+.env.*
+secrets.json

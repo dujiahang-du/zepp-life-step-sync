@@ -1,0 +1,15 @@
+{# Modified 2026-09-30: UI and interaction redesign; see NOTICE. #}
+{% extends 'base.html' %}
+{% block title %}概览 · 步数管家{% endblock %}
+{% block content %}
+<div class="page-heading"><div><span class="eyebrow">OVERVIEW / 概览</span><h1>今天的同步，一目了然。</h1><p>你好，{{ current_user.username }}。在这里掌握账号、计划与执行结果。</p></div><a class="button primary" href="{{ url_for('account.add_account') }}">{{ icon('plus') }}添加运动账号</a></div>
+<div class="system-status {{ 'healthy' if scheduler_running else 'paused' }}">{{ icon('clock') }}<span>{{ '自动调度运行中 · 每小时整点检查计划' if scheduler_running else '自动调度未运行 · 当前仅支持手动执行' }}</span><span class="timezone">北京时间</span></div>
+{% if not accounts %}
+<section class="onboarding panel"><div class="onboarding-copy"><span class="icon-tile large-tile">{{ icon('users') }}</span><h2>连接你的第一个运动账号</h2><p>只需一次配置，就能在这里查看同步计划和执行记录。</p><a class="button primary" href="{{ url_for('account.add_account') }}">连接 Zepp Life {{ icon('arrow') }}</a><small>这里添加的是 Zepp Life 手机号或邮箱，不是网站管理账号。</small></div><ol class="onboarding-steps"><li><span>1</span><div><strong>确认 Zepp Life 账号</strong><p>先在 Zepp Life App 正常登录，并完成所需的平台绑定。</p></div></li><li><span>2</span><div><strong>设置步数与时间窗口</strong><p>填写期望范围，选择每天自动执行的时间。</p></div></li><li><span>3</span><div><strong>验证连接，查看执行</strong><p>保存时只验证连接，之后可手动执行或等待计划。</p></div></li></ol></section>
+{% else %}
+<div class="metrics"><article class="metric"><span class="icon-tile">{{ icon('users') }}</span><div><span>运动账号</span><strong>{{ total_accounts }}<small>个</small></strong></div></article><article class="metric"><span class="icon-tile blue">{{ icon('clock') }}</span><div><span>已启用自动同步</span><strong>{{ active_accounts }}<small>个</small></strong></div></article><article class="metric"><span class="icon-tile amber">{{ icon('refresh') }}</span><div><span>今日执行次数</span><strong>{{ total_syncs }}<small>次</small></strong></div></article><article class="metric"><span class="icon-tile">{{ icon('check') }}</span><div><span>今日成功率</span><strong>{{ ('%.0f'|format(success_syncs / total_syncs * 100) + '%') if total_syncs else '—' }}</strong></div></article></div>
+<div class="section-toolbar"><div><h2>执行趋势</h2><p>每个账号单独统计，避免混合步数。</p></div><form method="get" class="inline-form"><label for="account-filter">运动账号</label><select id="account-filter" name="account">{% for account in accounts %}<option value="{{ account.id }}" {% if account.id == stats.selected %}selected{% endif %}>{{ account.mi_user }}</option>{% endfor %}</select><button class="button secondary compact" type="submit">查看</button></form></div>
+{% include 'trend.html' %}
+<section class="panel records-panel"><div class="section-heading"><div><h2>最近执行</h2><p>最近 8 条记录 · 时间均为北京时间</p></div><a class="text-link" href="{{ url_for('account.list_accounts') }}">管理账号 {{ icon('arrow') }}</a></div>{% set records = recent_records %}{% set show_account = true %}{% include 'record_table.html' %}</section>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,32 @@
+{# Modified 2026-09-30: UI and interaction redesign; see NOTICE. #}
+{% from 'components.html' import icon, csrf with context %}
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head><meta charset="UTF-8"><meta name="viewport" content="width=device-width, initial-scale=1"><meta name="csrf-token" content="{{ csrf_token() }}"><meta name="color-scheme" content="light"><title>{% block title %}步数管家{% endblock %}</title><link rel="icon" href="{{ url_for('static', filename='favicon.svg') }}" type="image/svg+xml"><link rel="stylesheet" href="{{ url_for('static', filename='app.css') }}"><script src="{{ url_for('static', filename='app.js') }}" defer></script></head>
+<body class="{{ 'signed-in' if current_user.is_authenticated else 'guest' }}">
+<a class="skip-link" href="#main">跳到主要内容</a>
+{% if current_user.is_authenticated %}
+<aside class="sidebar">
+  <a class="brand" href="{{ url_for('main.index') }}"><span class="brand-mark">{{ icon('motion') }}</span><span>步数管家<small>StepSync · 个人工作台</small></span></a>
+  <button class="menu-button icon-button" type="button" aria-label="展开导航" aria-expanded="false" aria-controls="main-nav" data-menu-toggle>{{ icon('menu') }}</button>
+  <nav id="main-nav" aria-label="主导航">
+    <span class="nav-label">工作空间</span>
+    <a class="nav-link {{ 'active' if request.endpoint == 'main.index' }}" href="{{ url_for('main.index') }}" {% if request.endpoint == 'main.index' %}aria-current="page"{% endif %}>{{ icon('grid') }}概览</a>
+    <a class="nav-link {{ 'active' if request.blueprint == 'account' }}" href="{{ url_for('account.list_accounts') }}" {% if request.blueprint == 'account' %}aria-current="page"{% endif %}>{{ icon('users') }}账号管理</a>
+    <div class="nav-tip">{{ icon('shield') }}<strong>连接与数据，由你掌握</strong><p>运动账号凭据加密保存在本机，运行记录随时可查。</p></div>
+    <div class="sidebar-bottom"><div class="profile"><span class="avatar">{{ current_user.username[:1]|upper }}</span><span><strong>{{ current_user.username }}</strong><small>管理账号</small></span></div><form method="post" action="{{ url_for('auth.logout') }}">{{ csrf() }}<button class="nav-link logout" type="submit">{{ icon('logout') }}退出登录</button></form></div>
+  </nav>
+</aside>
+{% else %}
+<header class="guest-header"><a class="brand" href="{{ url_for('main.index') }}"><span class="brand-mark">{{ icon('motion') }}</span><span>步数管家<small>StepSync</small></span></a><a class="button ghost" href="{{ url_for('auth.login') }}">进入工作台 {{ icon('arrow') }}</a></header>
+{% endif %}
+<div class="app-shell">
+{% if current_user.is_authenticated %}<header class="topbar"><span>你的运动账号工作台</span><span class="timezone">{{ icon('clock') }}北京时间 · UTC+8</span></header>{% endif %}
+<main id="main" tabindex="-1" class="main-content">
+  <div id="notifications" class="notifications" aria-live="polite">{% for category, message in get_flashed_messages(with_categories=true) %}<div class="notice {{ category }}" role="{{ 'alert' if category == 'danger' else 'status' }}">{{ icon('check' if category == 'success' else 'info') }}<span>{{ message }}</span><button class="icon-button dismiss" type="button" data-dismiss aria-label="关闭提示">{{ icon('close') }}</button></div>{% endfor %}</div>
+  {% block content %}{% endblock %}
+</main>
+<footer class="footer"><span>StepSync · 简单管理，清晰记录</span><span>Zepp 接受提交 ≠ 微信／支付宝已更新</span></footer>
+</div>
+<dialog id="confirm-dialog" aria-labelledby="confirm-title" aria-describedby="confirm-description"><div class="dialog-content"><span class="icon-tile danger">{{ icon('trash') }}</span><h2 id="confirm-title">删除这个运动账号？</h2><p id="confirm-description">账号配置与本地同步记录将一并删除，此操作不会删除 Zepp Life 账号。</p><div class="dialog-actions"><button type="button" class="button secondary" data-confirm-cancel>保留账号</button><button type="button" class="button danger" data-confirm-accept>确认删除</button></div></div></dialog>
+</body></html>
