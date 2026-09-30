@@ -173,3 +173,39 @@ def test_fallback_does_not_mask_submission_failure():
     message, ok = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session).sync_step(12345)
     assert not ok and '步数提交' in message and 'HTTP 500' in message
     assert sum(c.args[1].endswith('band_data.json') for c in session.request.call_args_list) == 1
+
+
+@pytest.mark.parametrize('status',[401,403])
+def test_cached_token_http_rejection_reauthenticates_once_and_completes(status):
+    session = Mock()
+    session.request.side_effect = [response(status)] + login_responses() + [response(500), response(data={'message':'success'})]
+    motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'expired-fixture','user_id':'actual-fixture-user'},session=session)
+    message, ok = motion.sync_step(12345)
+    assert ok
+    calls = session.request.call_args_list
+    assert calls[0].kwargs['params']['userid'] == 'actual-fixture-user'
+    assert calls[0].kwargs['params']['appid'] == calls[0].kwargs['headers']['clientid']
+    assert calls[0].kwargs['headers']['User-Agent'].startswith('MiFit6.14.0')
+    assert sum(c.args[1].endswith('/v2/registrations/tokens') for c in calls) == 1
+    assert sum(c.args[1].endswith('band_data.json') for c in calls) == 1
+    assert calls[-1].kwargs['headers']['apptoken'] == 'app-fixture'
+    assert motion.tokens['app_token'] == 'app-fixture'
+
+
+def test_reauthentication_failure_does_not_loop_or_submit():
+    session = Mock()
+    session.request.side_effect = [response(401),response(401)]
+    motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'expired','user_id':'uid'},session=session)
+    message, ok = motion.sync_step(12345)
+    assert not ok and '账号认证' in message and 'HTTP 401' in message
+    assert session.request.call_count == 2
+    assert not motion.tokens
+
+
+@pytest.mark.parametrize('status',[429,500])
+def test_token_probe_rate_limit_or_server_error_does_not_retry_login(status):
+    session = Mock()
+    session.request.return_value = response(status)
+    motion = MiMotion('mail@example.invalid','fixture',tokens={'app_token':'cached','user_id':'uid'},session=session)
+    assert motion.sync_step(12345)[1] is False
+    assert session.request.call_count == 1

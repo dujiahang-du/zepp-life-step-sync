@@ -82,10 +82,27 @@ class MiMotion:
     def login(self):
         app_token = self.tokens.get('app_token')
         if app_token and self.tokens.get('user_id'):
-            response = self._json(self._request('GET', 'https://api-mifit-cn3.zepp.com/huami.health.getUserInfo.json',
-                params={'userid': self.tokens['user_id']}, headers={'apptoken': app_token}))
-            if response.get('message') == 'success':
-                return self.tokens.get('login_token'), self.tokens['user_id']
+            params = {'r': str(uuid.uuid4()), 'userid': self.tokens['user_id'],
+                      'appid': '428135909242707968', 'channel': 'Normal', 'country': 'CN',
+                      'cv': '50818_6.14.0', 'device': 'android_31', 'device_type': 'android_phone',
+                      'lang': 'zh_CN', 'timezone': 'Asia/Shanghai', 'v': '2.0'}
+            headers = {'User-Agent': 'MiFit6.14.0 (M2007J1SC; Android 12; Density/2.75)',
+                       'country': 'CN', 'appplatform': 'android_phone', 'hm-privacy-diagnostics': 'false',
+                       'hm-privacy-ceip': 'true', 'x-request-id': str(uuid.uuid4()),
+                       'timezone': 'Asia/Shanghai', 'channel': 'Normal', 'cv': '50818_6.14.0',
+                       'appname': 'com.xiaomi.hm.health', 'v': '2.0', 'apptoken': app_token,
+                       'lang': 'zh_CN', 'clientid': '428135909242707968'}
+            try:
+                response = self._json(self._request('GET', 'https://api-mifit-cn3.zepp.com/huami.health.getUserInfo.json',
+                    params=params, headers=headers))
+            except MotionError as exc:
+                if exc.status_code not in (401, 403):
+                    raise
+                logging.getLogger(__name__).info('Zepp cached token rejected; authenticating once')
+            else:
+                if response.get('message') == 'success':
+                    return self.tokens.get('login_token'), self.tokens['user_id']
+            self.tokens = {}
         values = {'emailOrPhone': self.user, 'password': self.password, 'state': 'REDIRECTION',
                   'client_id': 'HuaMi', 'country_code': 'CN', 'token': 'access',
                   'redirect_uri': 'https://s3-us-west-2.amazonaws.com/hm-registration/successsignin.html'}
