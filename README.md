@@ -1,6 +1,19 @@
-# StepSync · Zepp Life 步数同步管理
+# StepSync · 微信运动 / Zepp Life（小米运动）步数同步工具
 
-Flask + SQLite 的 Zepp Life 账号管理工作台，提供响应式页面、按小时计划、执行状态与记录统计。所有时间按北京时间显示。
+StepSync 是基于 Python Flask + SQLite 的自托管步数同步 Web 工具，通过 Zepp Life（小米运动 / Mi Fit）接口提交步数，支持多账号管理、定时同步、手动同步和执行记录查询。可用于排查 Zepp Life 到微信运动的同步情况，所有时间按北京时间显示。
+
+**微信运动是否更新，以手机排行榜为准。** Zepp 接口返回“已接受”不代表微信已同步；本项目不是微信官方工具，也没有微信排行榜自动回读能力。已有一次使用者手机端验收反馈，具体范围见下方[真实微信同步验收与使用建议](#真实微信同步验收与使用建议)。
+
+StepSync is a self-hosted Python web app for Zepp Life (formerly Mi Fit) step submission, with multiple accounts, scheduled and manual sync, and execution history. WeChat Sports updates must be verified on the phone; a successful Zepp response does not guarantee a WeChat update.
+
+## 功能概览
+
+- **多账号管理**：独立的网站账号与 Zepp Life 账号，运动凭据在本机加密保存。
+- **定时与手动同步**：按小时执行计划，共用累计目标规则，保留本系统当天已成功提交的最高值。
+- **状态与记录**：后台队列、异常暂停、执行记录、七日趋势和记录筛选。
+- **本机部署**：Windows 快速启动，响应式页面；运行数据留在自己的部署环境中。
+
+快速阅读：[本机运行](#本机运行) · [手动同步为什么可能一直是同一个步数](#手动同步为什么可能一直是同一个步数) · [授权与异常恢复](#授权与异常恢复) · [设备确认与实验性绑定](#设备确认与实验性绑定) · [数据与安全](#数据与安全)
 
 ## 本机运行
 
