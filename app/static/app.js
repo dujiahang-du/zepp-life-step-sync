@@ -50,8 +50,8 @@ function validatePlan() {
   const preview = document.getElementById('plan-preview');
   preview.classList.toggle('invalid', !valid);
   if (!valid) preview.textContent = '请检查步数范围和执行时间，修正后即可保存。';
-  else if (!accountForm.elements.is_active.checked) preview.textContent = '自动同步已暂停。保存后可以在账号卡片手动执行。';
-  else preview.textContent = '每天 ' + start.value.padStart(2, '0') + ':00–' + end.value.padStart(2, '0') + ':00（北京时间），每小时整点执行，共 ' + (Number(end.value) - Number(start.value) + 1) + ' 次。保存不会立即提交步数。';
+  else if (!accountForm.elements.is_active.checked) preview.textContent = '自动同步已暂停。手动同步仍按当前时间折算目标，并保留当天已成功的最高值。保存不会立即提交步数。';
+  else preview.textContent = '每天 ' + start.value.padStart(2, '0') + ':00–' + end.value.padStart(2, '0') + ':00（北京时间），每小时整点执行，共 ' + (Number(end.value) - Number(start.value) + 1) + ' 次。手动同步也按时间折算；调整结束时间会改变自动执行窗口。保存不会立即提交步数。';
   return valid;
 }
 accountForm?.addEventListener('input', validatePlan);
